@@ -1,0 +1,133 @@
+import spade
+from aioxmpp import PresenceShow
+from spade.agent import Agent
+from spade.behaviour import CyclicBehaviour
+from spade.behaviour import OneShotBehaviour
+from spade.message import Message
+from spade.template import Template
+import time
+import asyncio
+
+
+class ClusterAgent(Agent):
+
+    state = 0
+
+    class SubscBehav(OneShotBehaviour):
+
+        def on_available(self, jid, stanza):
+            print("[{}] Agent {} is available.".format(self.agent.name, jid.split("@")[0]))
+
+        def on_subscribed(self, jid):
+            print("[{}] Agent {} has accepted the subscription.".format(self.agent.name, jid.split("@")[0]))
+            print("[{}] Contacts List: {}".format(self.agent.name, self.agent.presence.get_contacts()))
+
+        def on_subscribe(self, jid):
+            print("[{}] Agent {} asked for subscription. Let's aprove it.".format(self.agent.name, jid.split("@")[0]))
+            self.presence.approve(jid)
+
+        async def run(self):
+            print("Subscription behaviour running")
+            self.presence.set_available()
+            self.presence.on_subscribe = self.on_subscribe
+            self.presence.on_subscribed = self.on_subscribed
+            self.presence.on_available = self.on_available
+
+
+    class RecvBehav(CyclicBehaviour
+                    ):
+
+        async def run(self):
+            print("..........................................................................")
+            print("RecvBehav running")
+
+            msg = await self.receive(timeout=60)  # wait for a message for 10 seconds
+
+            if msg:
+
+                print("Message received with content: {}".format(msg.body))
+                print(msg.thread)
+
+                if msg.thread == "300":
+
+                    tag_num = int(msg.body)
+
+                    print(tag_num)
+                    print(int(ClusterAgent.state))
+
+                    if tag_num >= 9 and ClusterAgent.state == 1:
+
+                        print("Send stop command to server agent")
+                        command_serv = Message(to="server_agent@192.168.153.5")  # Instantiate the message
+                        command_serv.set_metadata("performative", "inform")  # Set the "inform" FIPA performative
+                        command_serv.thread = "2032"
+                        command_serv.body = str("[stop,3500ad8fc]")  # Set the message content
+                        await self.send(command_serv)
+
+                        print("send the flag  command to node agent")
+                        command_rpi = Message(to="rpi_agent@192.168.153.5")  # Instantiate the message
+                        command_rpi.set_metadata("performative", "inform")  # Set the "inform" FIPA performative
+                        command_rpi.thread = "2032"
+                        command_rpi.body = "B"  # Set the message content
+                        await self.send(command_rpi)
+
+                        ClusterAgent.state = 0
+
+                    elif tag_num < 9 and ClusterAgent.state == 0 :
+
+                        print("Start the service")
+                        command = Message(to="server_agent@192.168.153.5")  # Instantiate the message
+                        command.set_metadata("performative", "inform")  # Set the "inform" FIPA performative
+                        command.thread = "2032"
+                        command.body = str("[start,3500ad8fc]")  # Set the message content
+                        await self.send(command)
+
+                        print("send the flag  command to node agent")
+                        command_rpi = Message(to="rpi_agent@192.168.153.5")  # Instantiate the message
+                        command_rpi.set_metadata("performative", "inform")  # Set the "inform" FIPA performative
+                        command_rpi.thread = "2032"
+                        command_rpi.body = "A"  # Set the message content
+                        await self.send(command_rpi)
+
+                        ClusterAgent.state = 1
+
+                else:
+                    print("callback message")
+
+
+            else:
+                pass
+                #print("Did not received any message after 5 seconds")
+
+
+
+
+    async def setup(self):
+
+        c = self.SubscBehav()
+        template = Template()
+        template.set_metadata("performative", "inform")
+        self.add_behaviour(c, template)
+
+        print("Server agent  set up ...")
+        b = self.RecvBehav()
+        template = Template()
+        template.set_metadata("performative", "inform")
+        self.add_behaviour(b, template)
+
+
+
+
+async def main():
+    clusteragent = ClusterAgent("cluster_agent@192.168.153.5", "123")
+    await clusteragent.start(auto_register=True)
+    print("Cluster agent running ...")
+    clusteragent.web.start(hostname="127.0.0.1", port="10000")
+    clusteragent.presence.set_available(show=PresenceShow.CHAT)
+
+    await spade.wait_until_finished(clusteragent)
+    print("Agents finished")
+
+
+if __name__ == "__main__":
+    spade.run(main())
